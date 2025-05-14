@@ -1,0 +1,132 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import pickle
+from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix
+
+try:
+    from google.colab import drive
+    drive.mount('/content/drive')
+    DATA_PATH = '/content/drive/MyDrive/cleaned.xlsx'
+    print("Loading data from Google Drive:", DATA_PATH)
+except ModuleNotFoundError:
+    DATA_PATH = 'cleaned.xlsx'
+    print("Looking for cleaned.xlsx in working directory.")
+
+try:
+    df = pd.read_excel(DATA_PATH)
+except FileNotFoundError:
+    raise FileNotFoundError(f"Could not find {DATA_PATH}. Please ensure 'cleaned.xlsx' is present.")
+print(f"Dataset loaded: {df.shape[0]} rows, {df.shape[1]} columns")
+
+# --- Exploratory Data Analysis (EDA) ---
+categorical_cols = [
+    'Age_band_of_driver', 'Sex_of_driver', 'Educational_level',
+    'Vehicle_driver_relation', 'Driving_experience', 'Lanes_or_Medians',
+    'Types_of_Junction', 'Road_surface_type', 'Light_conditions',
+    'Weather_conditions', 'Type_of_collision', 'Vehicle_movement',
+    'Pedestrian_movement', 'Cause_of_accident'
+]
+
+for col in categorical_cols:
+    counts = df[col].value_counts()
+    plt.figure()
+    plt.bar(counts.index.astype(str), counts.values)
+    plt.xticks(rotation=45, ha='right')
+    plt.title(f'Distribution of {col}')
+    plt.tight_layout()
+    plt.show()
+
+junction_counts = df['Types_of_Junction'].value_counts().nlargest(10)
+plt.figure()
+plt.bar(junction_counts.index.astype(str), junction_counts.values)
+plt.xticks(rotation=45, ha='right')
+plt.title('Top 10 Junction Types by Accident Count')
+plt.tight_layout()
+plt.show()
+
+# ---  Preprocessing & Encoding ---
+df_processed = df.copy()
+encoders = {}
+for col in categorical_cols + ['Accident_severity']:
+    le = LabelEncoder()
+    df_processed[col] = le.fit_transform(df_processed[col].astype(str))
+    encoders[col] = le
+
+# Features & target
+X = df_processed.drop('Accident_severity', axis=1)
+y = df_processed['Accident_severity']
+
+# --- Train/Test Split & Model Training ---
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+model = RandomForestClassifier(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+
+# ---  Evaluation ---
+y_pred = model.predict(X_test)
+print('\nClassification Report:')
+print(classification_report(y_test, y_pred,
+      target_names=encoders['Accident_severity'].classes_))
+
+cm = confusion_matrix(y_test, y_pred)
+plt.figure()
+plt.imshow(cm, interpolation='nearest')
+plt.title('Confusion Matrix')
+plt.colorbar()
+plt.xticks(np.arange(len(encoders['Accident_severity'].classes_)),
+           encoders['Accident_severity'].classes_, rotation=45, ha='right')
+plt.yticks(np.arange(len(encoders['Accident_severity'].classes_)),
+           encoders['Accident_severity'].classes_)
+plt.ylabel('True Label')
+plt.xlabel('Predicted Label')
+plt.tight_layout()
+plt.show()
+
+# Feature importances
+importances = model.feature_importances_
+features = X.columns.to_numpy()
+indices = np.argsort(importances)[::-1]
+plt.figure()
+plt.barh(features[indices], importances[indices])
+plt.title('Feature Importances')
+plt.tight_layout()
+plt.show()
+
+# ---  Save Model & Encoders ---
+with open('rf_model.pkl', 'wb') as f:
+    pickle.dump(model, f)
+with open('encoders.pkl', 'wb') as f:
+    pickle.dump(encoders, f)
+print("Saved model to 'rf_model.pkl' and encoders to 'encoders.pkl'.")
+
+# ---  Prediction Utility ---
+def predict_accident(inputs: dict) -> str:
+    """
+    Predict accident severity from a dict of feature values.
+    Example:
+      inputs = {
+        'Age_band_of_driver': '25-30',
+        'Sex_of_driver': 'Male',
+        ...
+      }
+    Returns:
+      One of the severity classes (string).
+    """
+    row = []
+    for col in X.columns:
+        if col not in inputs:
+            raise KeyError(f"Missing feature '{col}'")
+        val = str(inputs[col])
+        row.append(encoders[col].transform([val])[0])
+    code = model.predict([row])[0]
+    return encoders['Accident_severity'].inverse_transform([code])[0]
+
+# Example usage
+if __name__ == '__main__':
+    sample = {col: df[col].mode()[0] for col in X.columns}
+    print("Example prediction:", predict_accident(sample))
